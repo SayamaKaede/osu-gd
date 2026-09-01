@@ -2,8 +2,8 @@
 // @name         osu!GD
 // @namespace sayama-kaede
 // @author       Sayama Kaede
-// @version      0.0.5
-// @description  プロフィールに、ゲスト難易度を提供したPending・Graveyardの譜面を表示します
+// @version      0.0.6
+// @description  プロフィールに、そのユーザーの Pending・Graveyard のゲスト難易度の譜面を表示します
 // @match        https://osu.ppy.sh/users/*
 // @run-at       document-idle
 // @grant        none
