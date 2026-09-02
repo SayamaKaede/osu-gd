@@ -2,7 +2,7 @@
 // @name         osu!GD
 // @namespace sayama-kaede
 // @author       Sayama Kaede
-// @version      0.0.6
+// @version      0.0.7
 // @description  プロフィールに、そのユーザーの Pending・Graveyard のゲスト難易度の譜面を表示します
 // @match        https://osu.ppy.sh/users/*
 // @run-at       document-idle
@@ -217,6 +217,17 @@
         return document.querySelector('.js-portal') ?? document.body;
     }
 
+    function cardSize() {
+        const MARK = 'beatmapset-panel--size-';
+
+        for (const panel of document.querySelectorAll(`.beatmapset-panel:not(.${PREFIX}__panel)`)) {
+            const found = [...panel.classList].find((name) => name.startsWith(MARK));
+            if (found) return found.slice(MARK.length);
+        }
+
+        return 'extra';
+    }
+
     function popupItem(beatmap) {
         const item = element('a', 'beatmaps-popup-item');
         item.href = `/beatmaps/${beatmap.id}`;
@@ -249,7 +260,7 @@
     }
 
     function buildPopup(set) {
-        const node = element('div', 'beatmaps-popup beatmaps-popup--size-extra');
+        const node = element('div', `beatmaps-popup beatmaps-popup--size-${cardSize()} ${PREFIX}__popup`);
         const content = element('div', 'beatmaps-popup__content');
 
         for (const mode of MODES) {
@@ -274,6 +285,16 @@
 
         popup = null;
         popupPanel = null;
+    }
+
+    function sweepPopups() {
+        for (const node of document.querySelectorAll(`.${PREFIX}__popup`)) {
+            if (node !== popup) node.remove();
+        }
+
+        for (const panel of document.querySelectorAll(`.${PREFIX}__panel.beatmapset-panel--beatmaps-popup-visible`)) {
+            if (panel !== popupPanel) panel.classList.remove('beatmapset-panel--beatmaps-popup-visible');
+        }
     }
 
     function showPopup(root, set) {
@@ -373,13 +394,13 @@
         const link = href(set);
         const hyped = set.hype != null;
 
-        const root = element('div', `beatmapset-panel beatmapset-panel--size-extra${hyped ? ' beatmapset-panel--with-hype-counts' : ''} js-audio--player ${PREFIX}__panel`);
+        const root = element('div', `beatmapset-panel beatmapset-panel--size-${cardSize()}${hyped ? ' beatmapset-panel--with-hype-counts' : ''} js-audio--player ${PREFIX}__panel`);
         if (set.preview_url) root.dataset.audioUrl = set.preview_url;
 
         const covers = element('a', 'beatmapset-panel__cover-container');
         covers.href = link;
 
-        for (const [col, size] of [['play', 'list'], ['info', 'cover']]) {
+        for (const [col, size] of [['play', 'list'], ['info', 'card']]) {
             const column = element('div', `beatmapset-panel__cover-col beatmapset-panel__cover-col--${col}`);
             column.append(cover(set, size));
             covers.append(column);
@@ -663,6 +684,8 @@
     let address = location.pathname;
 
     function tick() {
+        sweepPopups();
+
         if (location.pathname !== address) {
             address = location.pathname;
             started = false;
@@ -683,6 +706,8 @@
         style();
         start().catch((error) => console.error('[ゲスト難易度]', error));
     }
+
+    window.addEventListener('pagehide', hidePopup);
 
     new MutationObserver(tick).observe(document.body, { childList: true, subtree: true });
     setInterval(tick, 1000);
