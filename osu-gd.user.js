@@ -4,7 +4,7 @@
 // @author       Sayama Kaede
 // @version      0.0.8
 // @description  プロフィールに、そのユーザーの Pending・Graveyard のゲスト難易度の譜面を表示します
-// @match        https://osu.ppy.sh/users/*
+// @match        https://osu.ppy.sh/*
 // @run-at       document-idle
 // @grant        none
 // @homepageURL  https://github.com/SayamaKaede/osu-gd
@@ -60,9 +60,11 @@
     let profileId = null;
     let sections = null;
 
-    async function search(state, cursor) {
+    let visit = 0;
+
+    async function search(state, cursor, userId) {
         const params = new URLSearchParams({
-            q: `creator=${profileId}`,
+            q: `creator=${userId}`,
             s: state,
             sort: 'updated_desc',
             nsfw: 'true',
@@ -84,26 +86,34 @@
         return json?.search?.sort === 'updated_desc' && (json.total ?? 0) < SANITY_TOTAL;
     }
 
-    function keep(sets, states) {
+    function keep(sets, states, userId) {
         return (sets ?? []).filter((set) =>
-            set.user_id !== profileId
+            set.user_id !== userId
             && states.includes(set.status));
     }
 
     async function readMore(section) {
+        const left = () => section.visit !== visit;
+
+        if (left()) {
+            section.abandoned = true;
+            section.streams.forEach((s) => { s.done = true; });
+            return;
+        }
+
         const unfinished = section.streams.filter((s) => !s.done);
         if (unfinished.length === 0) return;
 
         const answers = await Promise.all(unfinished.map(async (stream) => {
             try {
-                const json = await search(stream.state, stream.cursor);
+                const json = await search(stream.state, stream.cursor, section.userId);
 
                 if (!honoured(json)) return { stream, refused: true };
 
                 stream.cursor = json.cursor_string ?? null;
                 stream.done = !stream.cursor;
 
-                return { stream, sets: keep(json.beatmapsets, section.states) };
+                return { stream, sets: keep(json.beatmapsets, section.states, section.userId) };
             } catch (error) {
                 console.warn('[ゲスト難易度]', stream.state, error);
                 stream.done = true;
@@ -111,6 +121,12 @@
                 return { stream, sets: [] };
             }
         }));
+
+        if (left()) {
+            section.abandoned = true;
+            section.streams.forEach((s) => { s.done = true; });
+            return;
+        }
 
         if (answers.some((a) => a.refused)) {
             section.refused = true;
@@ -611,6 +627,8 @@
     function render() {
         hidePopup();
 
+        if (!sections) return;
+
         const anchor = document.querySelector('.page-extra__beatmapsets')?.closest('.page-extra');
         if (!anchor) return;
 
@@ -973,14 +991,14 @@
 
     let chartCounts = null;
 
-    async function countAll() {
-        const counted = freshSections();
+    async function countAll(userId) {
+        const counted = freshSections(userId);
 
         for (const section of counted) {
             while (section.streams.some((s) => !s.done)) await readMore(section);
         }
 
-        if (counted.some((s) => s.refused || s.failed)) return null;
+        if (counted.some((s) => s.refused || s.failed || s.abandoned)) return null;
 
         return counted
             .filter((s) => s.sets.length > 0)
@@ -997,7 +1015,10 @@
             child.classList.contains('modding-profile-beatmapsets') && !child.classList.contains(`${PREFIX}-chart`));
         if (!theirs) return;
 
-        const slices = [...theirSlices(theirs), ...chartCounts];
+        const read = theirSlices(theirs);
+        if (read.length === 0 && !theirs.classList.contains('modding-profile-beatmapsets--empty')) return;
+
+        const slices = [...read, ...chartCounts];
         const signature = JSON.stringify(slices);
         const ours = top.querySelector(`.${PREFIX}-chart`);
 
@@ -1041,9 +1062,12 @@
         return fromCanonical ? Number(fromCanonical[1]) : null;
     }
 
-    function freshSections() {
+    function freshSections(userId) {
         return SECTIONS.map((section) => ({
             ...section,
+            userId,
+            visit,
+            abandoned: false,
             sets: [],
             shown: INITIAL,
             loading: false,
@@ -1055,13 +1079,14 @@
     }
 
     async function start() {
-        sections = freshSections();
+        const mine = freshSections(profileId);
+        sections = mine;
 
-        for (const section of sections) {
+        for (const section of mine) {
             await readMore(section);
         }
 
-        render();
+        if (sections === mine && mine.every((s) => !s.abandoned)) render();
     }
 
     let started = false;
@@ -1080,7 +1105,7 @@
 
         const from = address;
 
-        countAll()
+        countAll(id)
             .then((counts) => {
                 if (address !== from || profileId !== id) return;
 
@@ -1095,9 +1120,11 @@
 
         if (location.pathname !== address) {
             address = location.pathname;
+            visit++;
             started = false;
             chartStarted = false;
             chartCounts = null;
+            sections = null;
             profileId = null;
         }
 
