@@ -635,7 +635,7 @@
         else anchor.append(host);
     }
 
-    const CHART_COLOUR = { pending: 'hsl(var(--hsl-blue-1))', graveyard: 'hsl(var(--hsl-blue-4))' };
+    const CHART_COLOUR = { pending: 'hsl(var(--hsl-blue-1))', graveyard: 'hsl(var(--hsl-pink-2))' };
 
     const SVG_NS = 'http://www.w3.org/2000/svg';
 
