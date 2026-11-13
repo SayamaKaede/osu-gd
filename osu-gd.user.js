@@ -2,7 +2,7 @@
 // @name         osu!GD
 // @namespace sayama-kaede
 // @author       Sayama Kaede
-// @version      0.0.7
+// @version      0.0.8
 // @description  プロフィールに、そのユーザーの Pending・Graveyard のゲスト難易度の譜面を表示します
 // @match        https://osu.ppy.sh/users/*
 // @run-at       document-idle
@@ -33,12 +33,12 @@
     const SECTIONS = [
         {
             id: 'pending',
-            title: JAPANESE ? 'ゲスト難易度のPendingビートマップ' : 'Pending Guest Participation Beatmaps',
+            title: JAPANESE ? 'ゲスト難易度のPendingビートマップ' : 'Pending Guest Beatmaps',
             states: ['pending', 'wip'],
         },
         {
             id: 'graveyard',
-            title: JAPANESE ? 'ゲスト難易度のGraveyardビートマップ' : 'Graveyarded Guest Participation Beatmaps',
+            title: JAPANESE ? 'ゲスト難易度のGraveyardビートマップ' : 'Graveyarded Guest Beatmaps',
             states: ['graveyard'],
         },
     ];
@@ -107,6 +107,7 @@
             } catch (error) {
                 console.warn('[ゲスト難易度]', stream.state, error);
                 stream.done = true;
+                section.failed = true;
                 return { stream, sets: [] };
             }
         }));
@@ -634,6 +635,383 @@
         else anchor.append(host);
     }
 
+    const CHART_COLOUR = { pending: 'hsl(var(--hsl-blue-1))', graveyard: 'hsl(var(--hsl-blue-4))' };
+
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+
+    const DONUT = { size: 200, inner: 50, outer: 100, corner: 5, pad: 0.02 };
+
+    const TAU = 2 * Math.PI;
+
+    function pieAngles(values, padAngle) {
+        const n = values.length;
+        const sum = values.reduce((total, v) => (v > 0 ? total + v : total), 0);
+        const pad = Math.min(TAU / n, padAngle);
+        const k = sum ? (TAU - n * pad) / sum : 0;
+
+        let a0 = 0;
+
+        return values.map((v) => {
+            const a1 = a0 + (v > 0 ? v * k : 0) + pad;
+            const angles = { start: a0, end: a1, pad };
+            a0 = a1;
+            return angles;
+        });
+    }
+
+    function svgPath() {
+        const EPSILON = 1e-6;
+        const round = (n) => Math.round(n * 1000) / 1000;
+
+        let text = '';
+        let x0 = null;
+        let y0 = null;
+        let x1 = null;
+        let y1 = null;
+
+        return {
+            moveTo(x, y) {
+                x0 = x1 = x;
+                y0 = y1 = y;
+                text += `M${round(x)},${round(y)}`;
+            },
+            lineTo(x, y) {
+                x1 = x;
+                y1 = y;
+                text += `L${round(x)},${round(y)}`;
+            },
+            arc(x, y, r, a0, a1, ccw) {
+                const dx = r * Math.cos(a0);
+                const dy = r * Math.sin(a0);
+                const sx = x + dx;
+                const sy = y + dy;
+                const cw = ccw ? 0 : 1;
+                let da = ccw ? a0 - a1 : a1 - a0;
+
+                if (x1 === null) text += `M${round(sx)},${round(sy)}`;
+                else if (Math.abs(x1 - sx) > EPSILON || Math.abs(y1 - sy) > EPSILON) text += `L${round(sx)},${round(sy)}`;
+
+                if (!r) return;
+
+                if (da < 0) da = da % TAU + TAU;
+
+                if (da > TAU - EPSILON) {
+                    x1 = sx;
+                    y1 = sy;
+                    text += `A${round(r)},${round(r)},0,1,${cw},${round(x - dx)},${round(y - dy)}`
+                        + `A${round(r)},${round(r)},0,1,${cw},${round(sx)},${round(sy)}`;
+                } else if (da > EPSILON) {
+                    x1 = x + r * Math.cos(a1);
+                    y1 = y + r * Math.sin(a1);
+                    text += `A${round(r)},${round(r)},0,${+(da >= Math.PI)},${cw},${round(x1)},${round(y1)}`;
+                }
+            },
+            closePath() {
+                if (x1 !== null) {
+                    x1 = x0;
+                    y1 = y0;
+                    text += 'Z';
+                }
+            },
+            toString: () => text,
+        };
+    }
+
+    function intersect(x0, y0, x1, y1, x2, y2, x3, y3) {
+        const x10 = x1 - x0;
+        const y10 = y1 - y0;
+        const x32 = x3 - x2;
+        const y32 = y3 - y2;
+        let t = y32 * x10 - x32 * y10;
+
+        if (t * t < 1e-12) return null;
+
+        t = (x32 * (y0 - y2) - y32 * (x0 - x2)) / t;
+
+        return [x0 + t * x10, y0 + t * y10];
+    }
+
+    function cornerTangents(x0, y0, x1, y1, r1, rc, cw) {
+        const x01 = x0 - x1;
+        const y01 = y0 - y1;
+        const lo = (cw ? rc : -rc) / Math.sqrt(x01 * x01 + y01 * y01);
+        const ox = lo * y01;
+        const oy = -lo * x01;
+        const x11 = x0 + ox;
+        const y11 = y0 + oy;
+        const x10 = x1 + ox;
+        const y10 = y1 + oy;
+        const x00 = (x11 + x10) / 2;
+        const y00 = (y11 + y10) / 2;
+        const dx = x10 - x11;
+        const dy = y10 - y11;
+        const d2 = dx * dx + dy * dy;
+        const r = r1 - rc;
+        const D = x11 * y10 - x10 * y11;
+        const d = (dy < 0 ? -1 : 1) * Math.sqrt(Math.max(0, r * r * d2 - D * D));
+
+        let cx = (D * dy - dx * d) / d2;
+        let cy = (-D * dx - dy * d) / d2;
+        const cx1 = (D * dy + dx * d) / d2;
+        const cy1 = (-D * dx + dy * d) / d2;
+
+        if ((cx - x00) ** 2 + (cy - y00) ** 2 > (cx1 - x00) ** 2 + (cy1 - y00) ** 2) {
+            cx = cx1;
+            cy = cy1;
+        }
+
+        return { cx, cy, x01: -ox, y01: -oy, x11: cx * (r1 / r - 1), y11: cy * (r1 / r - 1) };
+    }
+
+    function arcPath(angles) {
+        const { start, end, pad } = angles;
+        const EPSILON = 1e-12;
+        const r0 = DONUT.inner;
+        const r1 = DONUT.outer;
+        const a0 = start - Math.PI / 2;
+        const a1 = end - Math.PI / 2;
+        const da = Math.abs(a1 - a0);
+        const cw = a1 > a0;
+        const path = svgPath();
+
+        if (da > TAU - EPSILON) {
+            path.moveTo(r1 * Math.cos(a0), r1 * Math.sin(a0));
+            path.arc(0, 0, r1, a0, a1, !cw);
+            path.moveTo(r0 * Math.cos(a1), r0 * Math.sin(a1));
+            path.arc(0, 0, r0, a1, a0, cw);
+            path.closePath();
+            return String(path);
+        }
+
+        let a01 = a0;
+        let a11 = a1;
+        let a00 = a0;
+        let a10 = a1;
+        let da0 = da;
+        let da1 = da;
+        const ap = pad / 2;
+        const rp = ap > EPSILON ? Math.sqrt(r0 * r0 + r1 * r1) : 0;
+        const rc = Math.min(Math.abs(r1 - r0) / 2, DONUT.corner);
+        let rc0 = rc;
+        let rc1 = rc;
+
+        if (rp > EPSILON) {
+            let p0 = Math.asin(rp / r0 * Math.sin(ap));
+            let p1 = Math.asin(rp / r1 * Math.sin(ap));
+
+            if ((da0 -= p0 * 2) > EPSILON) {
+                p0 *= cw ? 1 : -1;
+                a00 += p0;
+                a10 -= p0;
+            } else {
+                da0 = 0;
+                a00 = a10 = (a0 + a1) / 2;
+            }
+
+            if ((da1 -= p1 * 2) > EPSILON) {
+                p1 *= cw ? 1 : -1;
+                a01 += p1;
+                a11 -= p1;
+            } else {
+                da1 = 0;
+                a01 = a11 = (a0 + a1) / 2;
+            }
+        }
+
+        const x01 = r1 * Math.cos(a01);
+        const y01 = r1 * Math.sin(a01);
+        const x10 = r0 * Math.cos(a10);
+        const y10 = r0 * Math.sin(a10);
+        const x11 = r1 * Math.cos(a11);
+        const y11 = r1 * Math.sin(a11);
+        const x00 = r0 * Math.cos(a00);
+        const y00 = r0 * Math.sin(a00);
+
+        if (rc > EPSILON && da < Math.PI) {
+            const oc = intersect(x01, y01, x00, y00, x11, y11, x10, y10);
+
+            if (oc) {
+                const ax = x01 - oc[0];
+                const ay = y01 - oc[1];
+                const bx = x11 - oc[0];
+                const by = y11 - oc[1];
+                const kc = 1 / Math.sin(Math.acos((ax * bx + ay * by) / (Math.sqrt(ax * ax + ay * ay) * Math.sqrt(bx * bx + by * by))) / 2);
+                const lc = Math.sqrt(oc[0] * oc[0] + oc[1] * oc[1]);
+                rc0 = Math.min(rc, (r0 - lc) / (kc - 1));
+                rc1 = Math.min(rc, (r1 - lc) / (kc + 1));
+            } else {
+                rc0 = rc1 = 0;
+            }
+        }
+
+        if (!(da1 > EPSILON)) {
+            path.moveTo(x01, y01);
+        } else if (rc1 > EPSILON) {
+            const t0 = cornerTangents(x00, y00, x01, y01, r1, rc1, cw);
+            const t1 = cornerTangents(x11, y11, x10, y10, r1, rc1, cw);
+
+            path.moveTo(t0.cx + t0.x01, t0.cy + t0.y01);
+
+            if (rc1 < rc) {
+                path.arc(t0.cx, t0.cy, rc1, Math.atan2(t0.y01, t0.x01), Math.atan2(t1.y01, t1.x01), !cw);
+            } else {
+                path.arc(t0.cx, t0.cy, rc1, Math.atan2(t0.y01, t0.x01), Math.atan2(t0.y11, t0.x11), !cw);
+                path.arc(0, 0, r1, Math.atan2(t0.cy + t0.y11, t0.cx + t0.x11), Math.atan2(t1.cy + t1.y11, t1.cx + t1.x11), !cw);
+                path.arc(t1.cx, t1.cy, rc1, Math.atan2(t1.y11, t1.x11), Math.atan2(t1.y01, t1.x01), !cw);
+            }
+        } else {
+            path.moveTo(x01, y01);
+            path.arc(0, 0, r1, a01, a11, !cw);
+        }
+
+        if (!(da0 > EPSILON)) {
+            path.lineTo(x10, y10);
+        } else if (rc0 > EPSILON) {
+            const t0 = cornerTangents(x10, y10, x11, y11, r0, -rc0, cw);
+            const t1 = cornerTangents(x01, y01, x00, y00, r0, -rc0, cw);
+
+            path.lineTo(t0.cx + t0.x01, t0.cy + t0.y01);
+
+            if (rc0 < rc) {
+                path.arc(t0.cx, t0.cy, rc0, Math.atan2(t0.y01, t0.x01), Math.atan2(t1.y01, t1.x01), !cw);
+            } else {
+                path.arc(t0.cx, t0.cy, rc0, Math.atan2(t0.y01, t0.x01), Math.atan2(t0.y11, t0.x11), !cw);
+                path.arc(0, 0, r0, Math.atan2(t0.cy + t0.y11, t0.cx + t0.x11), Math.atan2(t1.cy + t1.y11, t1.cx + t1.x11), cw);
+                path.arc(t1.cx, t1.cy, rc0, Math.atan2(t1.y11, t1.x11), Math.atan2(t1.y01, t1.x01), !cw);
+            }
+        } else {
+            path.arc(0, 0, r0, a10, a00, cw);
+        }
+
+        path.closePath();
+
+        return String(path);
+    }
+
+    function donutPaths(values) {
+        return pieAngles(values, values.length > 1 ? DONUT.pad : 0).map(arcPath);
+    }
+
+    function theirSlices(chart) {
+        return [...chart.querySelectorAll('.modding-profile-beatmapsets__legend-item')].map((item) => ({
+            key: item.dataset.sliceKey ?? '',
+            colour: item.querySelector('.modding-profile-beatmapsets__swatch')?.style.getPropertyValue('--colour') ?? '',
+            label: item.querySelector('.modding-profile-beatmapsets__label')?.textContent ?? '',
+            value: Number((item.querySelector('.modding-profile-beatmapsets__value')?.textContent ?? '').replace(/\D/g, '')),
+        }));
+    }
+
+    function donut(slices) {
+        const bn = 'modding-profile-beatmapsets';
+        const root = element('div', `${bn} ${PREFIX}-chart`);
+
+        const svg = document.createElementNS(SVG_NS, 'svg');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('class', 'donut-chart__svg');
+        svg.setAttribute('viewBox', `0 0 ${DONUT.size} ${DONUT.size}`);
+
+        const group = document.createElementNS(SVG_NS, 'g');
+        group.setAttribute('transform', `translate(${DONUT.outer}, ${DONUT.outer})`);
+        svg.append(group);
+
+        const outlines = donutPaths(slices.map((slice) => slice.value));
+        const paths = [];
+        const items = [];
+        let hovered = null;
+
+        const paint = () => {
+            for (const { node, key } of paths) {
+                node.classList.toggle('donut-chart__slice--dimmed', hovered != null && hovered !== key);
+            }
+            for (const { node, key } of items) {
+                node.classList.toggle(`${bn}__legend-item--dimmed`, hovered != null && hovered !== key);
+                node.classList.toggle(`${bn}__legend-item--highlighted`, hovered === key);
+            }
+        };
+
+        const enter = (key) => () => { hovered = key; paint(); };
+        const leave = () => { hovered = null; paint(); };
+
+        const legend = element('ul', `${bn}__legend`);
+        legend.addEventListener('mouseleave', leave);
+
+        slices.forEach((slice, i) => {
+            const node = document.createElementNS(SVG_NS, 'path');
+            node.setAttribute('class', 'donut-chart__slice');
+            node.setAttribute('d', outlines[i]);
+            node.setAttribute('data-slice-key', slice.key);
+            node.setAttribute('fill', slice.colour);
+            node.addEventListener('mouseenter', enter(slice.key));
+            node.addEventListener('mouseleave', leave);
+            group.append(node);
+            paths.push({ node, key: slice.key });
+
+            const item = element('li', `${bn}__legend-item`);
+            item.dataset.sliceKey = slice.key;
+            item.addEventListener('mouseenter', enter(slice.key));
+
+            const label = element('span', `${bn}__label`);
+            const swatch = element('span', `${bn}__swatch`);
+            swatch.style.setProperty('--colour', slice.colour);
+            label.append(swatch, slice.label);
+
+            item.append(label, element('span', `${bn}__value`, number(slice.value)));
+            legend.append(item);
+            items.push({ node: item, key: slice.key });
+        });
+
+        const box = element('div', 'donut-chart');
+        box.append(svg);
+
+        const holder = element('div', `${bn}__chart`);
+        holder.append(box);
+
+        root.append(holder, legend);
+
+        return root;
+    }
+
+    let chartCounts = null;
+
+    async function countAll() {
+        const counted = freshSections();
+
+        for (const section of counted) {
+            while (section.streams.some((s) => !s.done)) await readMore(section);
+        }
+
+        if (counted.some((s) => s.refused || s.failed)) return null;
+
+        return counted
+            .filter((s) => s.sets.length > 0)
+            .map((s) => ({ key: `${PREFIX}-${s.id}`, colour: CHART_COLOUR[s.id], label: s.title, value: s.sets.length }));
+    }
+
+    function renderChart() {
+        if (!chartCounts || chartCounts.length === 0) return;
+
+        const top = document.querySelector('.profile-detail-stats-card--beatmapsets .profile-detail-stats-card__top');
+        if (!top) return;
+
+        const theirs = [...top.children].find((child) =>
+            child.classList.contains('modding-profile-beatmapsets') && !child.classList.contains(`${PREFIX}-chart`));
+        if (!theirs) return;
+
+        const slices = [...theirSlices(theirs), ...chartCounts];
+        const signature = JSON.stringify(slices);
+        const ours = top.querySelector(`.${PREFIX}-chart`);
+
+        if (ours && ours.dataset.from === signature && theirs.classList.contains(`${PREFIX}-replaced`)) return;
+
+        const drawn = donut(slices);
+        drawn.dataset.from = signature;
+
+        theirs.classList.add(`${PREFIX}-replaced`);
+
+        if (ours) ours.replaceWith(drawn);
+        else theirs.after(drawn);
+    }
+
     function style() {
         if (document.getElementById(`${PREFIX}-style`)) return;
 
@@ -647,6 +1025,7 @@
                 text-align: left; cursor: pointer;
             }
             .${PREFIX}__notice { color: hsl(var(--hsl-f1)); font-size: 12px; margin-top: 10px; }
+            .${PREFIX}-replaced { display: none !important; }
         `;
 
         document.head.append(css);
@@ -662,16 +1041,21 @@
         return fromCanonical ? Number(fromCanonical[1]) : null;
     }
 
-    async function start() {
-        sections = SECTIONS.map((section) => ({
+    function freshSections() {
+        return SECTIONS.map((section) => ({
             ...section,
             sets: [],
             shown: INITIAL,
             loading: false,
             folded: false,
             refused: false,
+            failed: false,
             streams: section.states.map((state) => ({ state, cursor: null, done: false })),
         }));
+    }
+
+    async function start() {
+        sections = freshSections();
 
         for (const section of sections) {
             await readMore(section);
@@ -681,7 +1065,30 @@
     }
 
     let started = false;
+    let chartStarted = false;
     let address = location.pathname;
+
+    function startChart() {
+        if (!document.querySelector('.profile-detail-stats-card--beatmapsets')) return;
+
+        const id = idFromPage();
+        if (!id) return;
+
+        chartStarted = true;
+        profileId = id;
+        style();
+
+        const from = address;
+
+        countAll()
+            .then((counts) => {
+                if (address !== from || profileId !== id) return;
+
+                chartCounts = counts;
+                renderChart();
+            })
+            .catch((error) => console.error('[ゲスト難易度]', error));
+    }
 
     function tick() {
         sweepPopups();
@@ -689,8 +1096,13 @@
         if (location.pathname !== address) {
             address = location.pathname;
             started = false;
+            chartStarted = false;
+            chartCounts = null;
             profileId = null;
         }
+
+        if (chartStarted) renderChart();
+        else startChart();
 
         if (started) {
             if (sections && !document.querySelector(`.${PREFIX}`)) render();
