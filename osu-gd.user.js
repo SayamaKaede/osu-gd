@@ -692,6 +692,8 @@
 
     const TAU = 2 * Math.PI;
 
+    //! Donut chart arcs ported from d3-shape 3.2.0 and d3-path 3.1.0 (ISC, Mike Bostock): https://github.com/d3/d3-shape
+
     function pieAngles(values, padAngle) {
         const n = values.length;
         const sum = values.reduce((total, v) => (v > 0 ? total + v : total), 0);
