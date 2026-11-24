@@ -2,7 +2,7 @@
 // @name         osu!GD
 // @namespace sayama-kaede
 // @author       Sayama Kaede
-// @version      0.0.8
+// @version      0.0.9
 // @description  プロフィールに、そのユーザーの Pending・Graveyard のゲスト難易度の譜面を表示します
 // @match        https://osu.ppy.sh/*
 // @run-at       document-idle
@@ -16,7 +16,9 @@
     'use strict';
 
     if (window.__lkGuestBeatmaps) return;
-    window.__lkGuestBeatmaps = true;
+    window.__lkGuestBeatmaps = '0.0.9';
+
+    const KAI_URL = 'https://raw.githubusercontent.com/SayamaKaede/osu-kai/main/osu-kai.user.js';
 
     const PREFIX = 'lk-gd';
 
@@ -46,6 +48,9 @@
     const SIGNED_OUT_NOTICE = JAPANESE ? 'osu!にログインすると表示されます' : 'Sign in to osu! to see these';
     const SHOW_MORE = JAPANESE ? 'もっと見る' : 'show more';
     const LOADING = JAPANESE ? '読み込み中…' : 'loading…';
+    const MOVED = JAPANESE
+        ? ['osu!GD は osu! Kai に統合しました。', 'osu! Kai をインストール', 'したら、osu!GD は削除してください']
+        : ['osu!GD is now part of osu! Kai. ', 'Install osu! Kai', ', then remove osu!GD'];
 
     const STATUS_LABEL = { pending: 'Pending', wip: 'WIP', graveyard: 'Graveyard' };
 
@@ -624,6 +629,31 @@
         return /nominat|ノミネート/i.test(heading?.textContent ?? '') ? heading : null;
     }
 
+    function movedNotice() {
+        const notice = element('div', `${PREFIX}__notice ${PREFIX}__moved`, MOVED[0]);
+        const link = element('a', null, MOVED[1]);
+        link.href = KAI_URL;
+        notice.append(link, MOVED[2]);
+        return notice;
+    }
+
+    function kaiDraws() {
+        return document.documentElement.dataset.osuKaiGuest === '1';
+    }
+
+    function retire() {
+        hidePopup();
+        visit++;
+        started = false;
+        chartStarted = false;
+        chartCounts = null;
+        sections = null;
+        profileId = null;
+        document.querySelector(`.${PREFIX}`)?.remove();
+        document.querySelector(`.${PREFIX}-chart`)?.remove();
+        for (const node of document.querySelectorAll(`.${PREFIX}-replaced`)) node.classList.remove(`${PREFIX}-replaced`);
+    }
+
     function render() {
         hidePopup();
 
@@ -635,6 +665,7 @@
         const existing = anchor.querySelector(`.${PREFIX}`);
         const host = existing ?? element('div', PREFIX);
         host.textContent = '';
+        host.append(movedNotice());
 
         const drawn = sections.filter((section) => section.sets.length > 0);
 
@@ -1046,6 +1077,7 @@
                 text-align: left; cursor: pointer;
             }
             .${PREFIX}__notice { color: hsl(var(--hsl-f1)); font-size: 12px; margin-top: 10px; }
+            .${PREFIX}__moved { margin-top: 30px; }
             .${PREFIX}-replaced { display: none !important; }
         `;
 
@@ -1117,6 +1149,11 @@
 
     function tick() {
         sweepPopups();
+
+        if (kaiDraws()) {
+            if (started || chartStarted) retire();
+            return;
+        }
 
         if (location.pathname !== address) {
             address = location.pathname;

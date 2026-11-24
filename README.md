@@ -1,5 +1,7 @@
 # osu!GD
 
+**osu!GD は [osu! Kai](https://github.com/SayamaKaede/osu-kai) に統合しました。** osu! Kai をインストールしたら、osu!GD は削除してください。両方が入っている間は、osu! Kai の側が表示します。
+
 osu! および ppy とは関係ありません。不具合が発生しても osu! 側に問い合わせないでください。
 
 osu! のプロフィールページに、そのユーザーの Pending・Graveyard のゲスト難易度の譜面を表示する Tampermonkey スクリプトです。
